@@ -7,6 +7,7 @@ import { saveAnalysisImage } from "@/lib/image-store";
 
 const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
+type QuotePreview = { symbol: string; price: string; change: string; volume: string };
 
 export default function Home() {
   const router = useRouter();
@@ -19,8 +20,25 @@ export default function Home() {
   const [stockCode, setStockCode] = useState("");
   const [market, setMarket] = useState("A股");
   const [period, setPeriod] = useState("日K");
+  const [quote, setQuote] = useState<QuotePreview | null>(null);
+  const [quoteStatus, setQuoteStatus] = useState<string | null>(null);
 
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }, [previewUrl]);
+
+  useEffect(() => {
+    if (market !== "A股" || !/^\d{6}$/.test(stockCode)) { setQuote(null); setQuoteStatus(null); return; }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setQuoteStatus("正在获取实时行情…");
+      try {
+        const response = await fetch(`/api/market?stockCode=${stockCode}`, { signal: controller.signal, cache: "no-store" });
+        const payload = await response.json() as { available: boolean; data?: QuotePreview; message?: string };
+        if (!response.ok || !payload.available || !payload.data) throw new Error(payload.message || "行情暂时不可用。");
+        setQuote(payload.data); setQuoteStatus(null);
+      } catch (caught) { if (!controller.signal.aborted) { setQuote(null); setQuoteStatus(caught instanceof Error ? caught.message : "行情暂时不可用。"); } }
+    }, 350);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [stockCode, market]);
 
   function selectFile(selected: File | undefined) {
     if (!selected) return;
@@ -69,7 +87,10 @@ export default function Home() {
           {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
         </div>
       </section>
-      <section className="mt-8 rounded-3xl border border-[#d9e3dc] bg-white p-5 sm:p-7"><div className="mb-5"><h2 className="text-lg font-bold">补充信息 <span className="text-sm font-normal text-[#64736e]">（可选）</span></h2><p className="mt-1 text-sm text-[#64736e]">帮助 AI 更准确地理解这张图。</p></div><div className="grid gap-4 md:grid-cols-3"><label className="text-sm font-medium">股票代码<input value={stockCode} onChange={(event) => setStockCode(event.target.value)} placeholder="例如：600519" className="mt-2 w-full rounded-xl border border-[#d9e3dc] px-4 py-3 outline-none transition focus:border-[#177a53] focus:ring-2 focus:ring-emerald-100" /></label><label className="text-sm font-medium">市场<select value={market} onChange={(event) => setMarket(event.target.value)} className="mt-2 w-full rounded-xl border border-[#d9e3dc] bg-white px-4 py-3 outline-none focus:border-[#177a53] focus:ring-2 focus:ring-emerald-100"><option>A股</option><option>港股</option><option>美股</option><option>其他</option></select></label><label className="text-sm font-medium">K线周期<select value={period} onChange={(event) => setPeriod(event.target.value)} className="mt-2 w-full rounded-xl border border-[#d9e3dc] bg-white px-4 py-3 outline-none focus:border-[#177a53] focus:ring-2 focus:ring-emerald-100"><option>日K</option><option>周K</option><option>月K</option><option>60分钟</option><option>30分钟</option><option>15分钟</option></select></label></div><button onClick={startAnalysis} disabled={isAnalyzing} className="mt-7 w-full rounded-xl bg-[#177a53] px-5 py-3.5 font-semibold text-white transition hover:bg-[#106540] disabled:cursor-wait disabled:opacity-70 sm:w-auto">{isAnalyzing ? "正在读取K线图…" : <>开始分析 <span aria-hidden>→</span></>}</button></section>
+      <section className="mt-8 rounded-3xl border border-[#d9e3dc] bg-white p-5 sm:p-7"><div className="mb-5"><h2 className="text-lg font-bold">补充信息 <span className="text-sm font-normal text-[#64736e]">（可选）</span></h2><p className="mt-1 text-sm text-[#64736e]">帮助 AI 更准确地理解这张图。</p></div><div className="grid gap-4 md:grid-cols-3"><label className="text-sm font-medium">股票代码<input value={stockCode} onChange={(event) => setStockCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="例如：300308" className="mt-2 w-full rounded-xl border border-[#d9e3dc] px-4 py-3 outline-none transition focus:border-[#177a53] focus:ring-2 focus:ring-emerald-100" /></label><label className="text-sm font-medium">市场<select value={market} onChange={(event) => setMarket(event.target.value)} className="mt-2 w-full rounded-xl border border-[#d9e3dc] bg-white px-4 py-3 outline-none focus:border-[#177a53] focus:ring-2 focus:ring-emerald-100"><option>A股</option><option>港股</option><option>美股</option><option>其他</option></select></label><label className="text-sm font-medium">K线周期<select value={period} onChange={(event) => setPeriod(event.target.value)} className="mt-2 w-full rounded-xl border border-[#d9e3dc] bg-white px-4 py-3 outline-none focus:border-[#177a53] focus:ring-2 focus:ring-emerald-100"><option>日K</option><option>周K</option><option>月K</option><option>60分钟</option><option>30分钟</option><option>15分钟</option></select></label></div>{quote && <div className="mt-5 grid gap-3 rounded-2xl bg-[#f4f7f3] p-4 sm:grid-cols-3"><QuoteItem label="当前价格" value={quote.price} /><QuoteItem label="涨跌幅" value={quote.change} positive={quote.change.startsWith("+") || !quote.change.startsWith("-")} /><QuoteItem label="成交量" value={formatVolume(quote.volume)} /></div>}{quoteStatus && <p className="mt-3 text-sm text-[#64736e]">{quoteStatus}</p>}<button onClick={startAnalysis} disabled={isAnalyzing} className="mt-7 w-full rounded-xl bg-[#177a53] px-5 py-3.5 font-semibold text-white transition hover:bg-[#106540] disabled:cursor-wait disabled:opacity-70 sm:w-auto">{isAnalyzing ? "正在读取K线图…" : <>开始分析 <span aria-hidden>→</span></>}</button></section>
     </div>
   </main>;
 }
+
+function QuoteItem({ label, value, positive }: { label: string; value: string; positive?: boolean }) { return <div><p className="text-xs font-semibold text-[#64736e]">{label}</p><p className={`mt-1 text-lg font-bold ${positive === undefined ? "text-[#10211c]" : positive ? "text-[#177a53]" : "text-red-600"}`}>{value}</p></div>; }
+function formatVolume(value: string) { const number = Number(value); return Number.isFinite(number) && number >= 10_000 ? `${(number / 10_000).toFixed(2)}万` : value; }
