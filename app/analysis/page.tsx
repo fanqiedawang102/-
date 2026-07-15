@@ -6,22 +6,42 @@ import type { AnalysisResponse } from "@/lib/analysis";
 import { loadAnalysisImage } from "@/lib/image-store";
 
 type SavedAnalysis = { result: AnalysisResponse; stockCode: string; market: string; period: string };
+type LiveMarketOverview = { data_source: string; current_price: string; change_percent: string; latest_volume: string };
 
 export default function AnalysisPage() {
   const [analysis, setAnalysis] = useState<SavedAnalysis | null>(null);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageUnavailable, setImageUnavailable] = useState(false);
+  const [liveMarket, setLiveMarket] = useState<LiveMarketOverview | null>(null);
   useEffect(() => {
     const saved = sessionStorage.getItem("chart-analysis"); if (saved) setAnalysis(JSON.parse(saved));
     let url: string | null = null; let cancelled = false;
     loadAnalysisImage().then((image) => { if (!image) { if (!cancelled) setImageUnavailable(true); return; } url = URL.createObjectURL(image); if (!cancelled) setImageUrl(url); }).catch(() => { if (!cancelled) setImageUnavailable(true); });
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
   }, []);
+  useEffect(() => {
+    if (!analysis || !/^\d{6}$/.test(analysis.stockCode)) return;
+    const controller = new AbortController();
+    fetch(`/api/market?stockCode=${analysis.stockCode}`, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        const payload = await response.json() as { available?: boolean; message?: string; data?: { price?: string; change?: string; volume?: string } };
+        if (!response.ok || !payload.available || !payload.data?.price || !payload.data.change || !payload.data.volume) {
+          setLiveMarket({ data_source: "东方财富", current_price: payload.message || "实时行情暂不可用", change_percent: "—", latest_volume: "—" });
+          return;
+        }
+        setLiveMarket({ data_source: "东方财富（实时）", current_price: payload.data.price, change_percent: payload.data.change, latest_volume: payload.data.volume });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setLiveMarket({ data_source: "东方财富", current_price: "实时行情暂不可用", change_percent: "—", latest_volume: "—" });
+      });
+    return () => controller.abort();
+  }, [analysis]);
   if (!analysis) return <main className="grid min-h-screen place-items-center p-6 text-center"><div><p className="text-lg font-semibold">没有可展示的分析结果</p><Link href="/" className="mt-4 inline-block font-semibold text-[#177a53]">返回上传图片 →</Link></div></main>;
 
   const { result, stockCode, market, period } = analysis;
+  const marketOverview = liveMarket ?? result.market_overview;
   const outlook = getOutlook(result);
-  const currentPrice = parseNumber(result.market_overview.current_price);
+  const currentPrice = parseNumber(marketOverview.current_price);
   const supportPrice = parseNumber(result.support.area);
   const resistancePrice = parseNumber(result.resistance.area);
   const observationConditions = result.trading_plan?.observation_conditions ?? [];
@@ -32,7 +52,7 @@ export default function AnalysisPage() {
 
     <section className={`mb-5 overflow-hidden rounded-3xl border p-5 sm:p-6 ${outlook.tone.card}`}><div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between"><div><p className={`text-sm font-semibold ${outlook.tone.text}`}>AI 综合判断</p><h2 className="mt-1 text-2xl font-bold">{outlook.icon} {outlook.title}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-[#42534c]">{shortText(result.summary, 92)}</p></div><div className="grid grid-cols-3 gap-2 sm:min-w-[340px]"><Score label="当前趋势" value={result.market_stage} tone={outlook.tone} /><Score label="短线评级" value={outlook.rating} tone={outlook.tone} /><Score label="风险等级" value={outlook.risk} tone={outlook.riskTone} /></div></div></section>
 
-    <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]"><aside className="space-y-4 lg:sticky lg:top-6 lg:self-start"><div className="overflow-hidden rounded-3xl border border-[#d9e3dc] bg-white p-4">{imageUrl ? <img src={imageUrl} alt="用于分析的K线图" className="h-64 w-full rounded-2xl bg-[#f4f7f3] object-contain" /> : <div className="grid h-64 place-items-center rounded-2xl bg-[#f4f7f3] px-5 text-center text-sm text-[#64736e]">{imageUnavailable ? "未找到本次分析的图片。请返回后重新上传。" : "正在恢复已上传的K线图…"}</div>}<p className="mt-3 text-xs leading-5 text-[#64736e]">图片识别结果已结合东方财富行情与本地技术知识库。</p></div><CompactCard title="行情快照"><div className="grid grid-cols-3 gap-2"><MiniStat label="现价" value={result.market_overview.current_price} /><MiniStat label="涨跌幅" value={result.market_overview.change_percent} accent /><MiniStat label="成交量" value={compactNumber(result.market_overview.latest_volume)} /></div><p className="mt-3 text-xs text-[#64736e]">数据源：{result.market_overview.data_source}</p></CompactCard></aside>
+    <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]"><aside className="space-y-4 lg:sticky lg:top-6 lg:self-start"><div className="overflow-hidden rounded-3xl border border-[#d9e3dc] bg-white p-4">{imageUrl ? <img src={imageUrl} alt="用于分析的K线图" className="h-64 w-full rounded-2xl bg-[#f4f7f3] object-contain" /> : <div className="grid h-64 place-items-center rounded-2xl bg-[#f4f7f3] px-5 text-center text-sm text-[#64736e]">{imageUnavailable ? "未找到本次分析的图片。请返回后重新上传。" : "正在恢复已上传的K线图…"}</div>}<p className="mt-3 text-xs leading-5 text-[#64736e]">图片识别结果已结合东方财富行情与本地技术知识库。</p></div><CompactCard title="行情快照"><div className="grid grid-cols-3 gap-2"><MiniStat label="现价" value={marketOverview.current_price} /><MiniStat label="涨跌幅" value={marketOverview.change_percent} accent /><MiniStat label="成交量" value={compactNumber(marketOverview.latest_volume)} /></div><p className="mt-3 text-xs text-[#64736e]">数据源：{marketOverview.data_source}</p></CompactCard></aside>
 
       <div className="space-y-5">
         <section className="grid gap-5 md:grid-cols-2"><CompactCard title="趋势依据" icon="↗"><SignalRow label="均线" value={shortText(result.trend.moving_average, 48)} /><SignalRow label="高低点" value={shortText(result.trend.high_low_structure, 48)} /><SignalRow label="K线排列" value={shortText(result.trend.candlestick_arrangement, 48)} /></CompactCard><CompactCard title="量价状态" icon="▥"><p className={`text-lg font-bold ${volumeTone(result.volume.assessment)}`}>{result.volume.assessment}</p><p className="mt-2 text-sm leading-6 text-[#64736e]">{shortText(result.volume.evidence, 74)}</p></CompactCard></section>
